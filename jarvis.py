@@ -26,7 +26,7 @@ def load_config():
             loaded = json.load(f)
         loaded.pop("api_key", None)
         provider = loaded.get("provider", DEFAULT["provider"])
-        if provider not in ("ollama", "deepseek", "gemini", "openai_compatible"):
+        if provider not in ("ollama", "deepseek", "gemini", "groq", "openai_compatible"):
             provider = DEFAULT["provider"]
         loaded["provider"] = provider
         if provider == "deepseek":
@@ -35,8 +35,13 @@ def load_config():
         elif provider == "gemini":
             loaded["base_url"] = loaded.get("base_url") or "https://generativelanguage.googleapis.com/v1beta/openai"
             loaded["openai_model"] = loaded.get("openai_model") or "gemini-2.5-flash"
+        elif provider == "groq":
+            loaded["base_url"] = loaded.get("base_url") or "https://api.groq.com/openai/v1"
+            loaded["openai_model"] = loaded.get("openai_model") or "openai/gpt-oss-20b"
         elif provider == "openai_compatible":
             loaded["base_url"] = loaded.get("base_url") or "https://api.openai.com/v1"
+        loaded.setdefault("auto_fallback", True)
+        loaded.setdefault("fallback_order", ["gemini", "groq", "ollama"])
         return {**DEFAULT, **loaded}
     except Exception:
         return DEFAULT.copy()
@@ -198,6 +203,7 @@ class Jarvis:
         self.busy = True
         self.status.config(text="● Trabalhando...", fg="#ffcb80")
         self.send_btn.config(state="disabled")
+        self.active_provider = None
         threading.Thread(target=self.agent_loop, daemon=True).start()
 
     def describe_tool_action(self, name, args):
@@ -221,7 +227,7 @@ class Jarvis:
                 self.messages[0]["content"] = SYSTEM
             for step in range(int(CFG.get("max_steps",8))):
                 self.q.put(("progress", f"Etapa {step + 1}: analisando o pedido e planejando a próxima ação..."))
-                response = self.call_model(self.messages)
+                response = self.call_model_with_fallback(self.messages)
                 msg = response.get("message", {})
                 tool_calls = msg.get("tool_calls") or []
                 if not tool_calls:
@@ -274,12 +280,55 @@ class Jarvis:
         env_names = {
             "deepseek": "DEEPSEEK_API_KEY",
             "gemini": "GEMINI_API_KEY",
+            "groq": "GROQ_API_KEY",
             "openai_compatible": "JARVIS_API_KEY",
         }
         return os.environ.get(env_names.get(provider, ""), "")
 
-    def call_model(self, messages):
-        provider = CFG.get("provider", "deepseek")
+    def call_model_with_fallback(self, messages):
+        primary = CFG.get("provider", "ollama")
+        if not CFG.get("auto_fallback", True):
+            candidates = [primary]
+        else:
+            order = CFG.get("fallback_order", ["gemini", "groq", "ollama"])
+            candidates = [self.active_provider or primary]
+            candidates.extend(p for p in order if p not in candidates)
+            if primary not in candidates:
+                candidates.insert(0, primary)
+
+        errors = []
+        for provider in candidates:
+            try:
+                response = self.call_model(messages, provider=provider)
+                if self.active_provider and provider != self.active_provider:
+                    self.q.put(("progress", f"Troca automática: {self.active_provider} indisponível; JARVIS passou a usar {provider}."))
+                elif provider != primary:
+                    self.q.put(("progress", f"Provedor principal indisponível; JARVIS passou automaticamente para {provider}."))
+                self.active_provider = provider
+                return response
+            except Exception as exc:
+                errors.append(f"{provider}: {exc}")
+                if not CFG.get("auto_fallback", True) or not self.is_fallback_error(exc):
+                    raise
+                self.q.put(("progress", f"Provedor {provider} falhou; verificando a próxima opção gratuita..."))
+        raise RuntimeError("Nenhum provedor configurado respondeu. " + " | ".join(errors))
+
+    def is_fallback_error(self, error):
+        message = str(error).lower()
+        if "chave api não encontrada" in message:
+            return True
+        retryable_codes = ("http 408", "http 409", "http 425", "http 429",
+                           "http 500", "http 502", "http 503", "http 504")
+        if any(code in message for code in retryable_codes):
+            return True
+        return any(term in message for term in (
+            "urlerror", "timed out", "timeout", "connection reset",
+            "connection refused", "temporary failure", "name or service not known",
+            "remote end closed", "network is unreachable"
+        ))
+
+    def call_model(self, messages, provider=None):
+        provider = provider or CFG.get("provider", "deepseek")
         if provider == "ollama":
             url = CFG.get("base_url", "http://localhost:11434").rstrip("/") + "/api/chat"
             payload = {"model": CFG.get("model", "qwen2.5:3b"), "messages": messages, "tools": TOOLS, "stream": False}
@@ -289,8 +338,11 @@ class Jarvis:
             if provider == "deepseek":
                 base_url, model = "https://api.deepseek.com", CFG.get("openai_model", "deepseek-chat")
             elif provider == "gemini":
-                base_url = CFG.get("base_url", "https://generativelanguage.googleapis.com/v1beta/openai")
+                base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
                 model = CFG.get("openai_model", "gemini-2.5-flash")
+            elif provider == "groq":
+                base_url = "https://api.groq.com/openai/v1"
+                model = CFG.get("openai_model", "openai/gpt-oss-20b")
             else:
                 base_url, model = CFG.get("base_url", "https://api.openai.com/v1"), CFG.get("openai_model", "gpt-4.1-mini")
             api_key = self.get_api_key(provider)
@@ -433,21 +485,24 @@ class Jarvis:
         win.configure(bg="#0d1b2c")
         tk.Label(win,text="Provedor de IA",fg="white",bg="#0d1b2c").pack(pady=(15,3))
         provider = tk.StringVar(value=CFG.get("provider", "ollama"))
-        provider_box = ttk.Combobox(win,textvariable=provider,values=["ollama","gemini","deepseek","openai_compatible"],state="readonly")
+        provider_box = ttk.Combobox(win,textvariable=provider,values=["gemini","groq","ollama","deepseek","openai_compatible"],state="readonly")
         provider_box.pack()
+        auto_fallback = tk.BooleanVar(value=bool(CFG.get("auto_fallback", True)))
+        ttk.Checkbutton(win,text="Ativar troca automática quando um provedor falhar",variable=auto_fallback).pack(pady=(8,2))
+        tk.Label(win,text="Ordem automática de reserva: Gemini → Groq → Ollama (o provedor escolhido é sempre tentado primeiro).",fg="#9db4c7",bg="#0d1b2c",wraplength=510).pack(pady=(2,4))
         fields = {}
         for label,key,show in [
             ("Endereço base (OpenAI/Ollama)","base_url",None),
             ("Modelo local (Ollama)","model",None),
-            ("Modelo online (Gemini: gemini-2.5-flash)","openai_model",None),
+            ("Modelo online (Gemini ou Groq)","openai_model",None),
             ("Nova chave API (oculta; não será gravada em config.json)","api_key","*")]:
             tk.Label(win,text=label,fg="white",bg="#0d1b2c",wraplength=510).pack(pady=(10,2))
             v=tk.StringVar(value=(CFG.get(key,"") if key != "api_key" else ""))
             ttk.Entry(win,textvariable=v,width=68,show=show).pack(); fields[key]=v
         def apply_provider_defaults(_event=None):
             chosen = provider.get()
-            default_urls = {"deepseek":"https://api.deepseek.com", "gemini":"https://generativelanguage.googleapis.com/v1beta/openai", "openai_compatible":"https://api.openai.com/v1", "ollama":"http://localhost:11434"}
-            default_models = {"deepseek":"deepseek-chat", "gemini":"gemini-2.5-flash", "openai_compatible":"gpt-4.1-mini"}
+            default_urls = {"deepseek":"https://api.deepseek.com", "gemini":"https://generativelanguage.googleapis.com/v1beta/openai", "groq":"https://api.groq.com/openai/v1", "openai_compatible":"https://api.openai.com/v1", "ollama":"http://localhost:11434"}
+            default_models = {"deepseek":"deepseek-chat", "gemini":"gemini-2.5-flash", "groq":"openai/gpt-oss-20b", "openai_compatible":"gpt-4.1-mini"}
             current_url = fields["base_url"].get().strip()
             if not current_url or current_url in set(default_urls.values()):
                 fields["base_url"].set(default_urls.get(chosen, default_urls["ollama"]))
@@ -455,15 +510,17 @@ class Jarvis:
             if not current_model or current_model in set(default_models.values()):
                 fields["openai_model"].set(default_models.get(chosen, ""))
         provider_box.bind("<<ComboboxSelected>>", apply_provider_defaults)
-        tk.Label(win,text="Gemini gratuito: https://generativelanguage.googleapis.com/v1beta/openai • modelo: gemini-2.5-flash",fg="#9db4c7",bg="#0d1b2c",wraplength=510).pack(pady=(12,2))
+        tk.Label(win,text="Gemini e Groq usam APIs compatíveis com OpenAI. Groq: modelo openai/gpt-oss-20b.",fg="#9db4c7",bg="#0d1b2c",wraplength=510).pack(pady=(12,2))
         tk.Label(win,text="A chave é armazenada no Gerenciador de Credenciais do Windows.",fg="#9db4c7",bg="#0d1b2c",wraplength=510).pack()
         def save():
             chosen=provider.get(); CFG["provider"]=chosen
-            default_urls = {"deepseek":"https://api.deepseek.com", "gemini":"https://generativelanguage.googleapis.com/v1beta/openai", "openai_compatible":"https://api.openai.com/v1", "ollama":"http://localhost:11434"}
+            default_urls = {"deepseek":"https://api.deepseek.com", "gemini":"https://generativelanguage.googleapis.com/v1beta/openai", "groq":"https://api.groq.com/openai/v1", "openai_compatible":"https://api.openai.com/v1", "ollama":"http://localhost:11434"}
             CFG["base_url"]=fields["base_url"].get().strip() or default_urls.get(chosen, "http://localhost:11434")
             CFG["model"]=fields["model"].get().strip() or "qwen2.5:1.5b"
-            default_models = {"deepseek":"deepseek-chat", "gemini":"gemini-2.5-flash", "openai_compatible":"gpt-4.1-mini"}
+            default_models = {"deepseek":"deepseek-chat", "gemini":"gemini-2.5-flash", "groq":"openai/gpt-oss-20b", "openai_compatible":"gpt-4.1-mini"}
             CFG["openai_model"]=fields["openai_model"].get().strip() or default_models.get(chosen, "")
+            CFG["auto_fallback"]=bool(auto_fallback.get())
+            CFG["fallback_order"]=["gemini","groq","ollama"]
             secret=fields["api_key"].get().strip()
             if secret:
                 if not keyring:
