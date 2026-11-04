@@ -25,10 +25,23 @@ def load_config():
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
             loaded = json.load(f)
         loaded.pop("api_key", None)
-        if loaded.get("provider") == "deepseek":
-            loaded["provider"] = "ollama"
-            loaded["base_url"] = "http://localhost:11434"
-            loaded["model"] = "qwen2.5:1.5b"
+        provider = loaded.get("provider", DEFAULT["provider"])
+        if provider not in ("ollama", "deepseek", "gemini", "groq", "openai_compatible"):
+            provider = DEFAULT["provider"]
+        loaded["provider"] = provider
+        if provider == "deepseek":
+            loaded["base_url"] = loaded.get("base_url") or "https://api.deepseek.com"
+            loaded["openai_model"] = loaded.get("openai_model") or "deepseek-chat"
+        elif provider == "gemini":
+            loaded["base_url"] = loaded.get("base_url") or "https://generativelanguage.googleapis.com/v1beta/openai"
+            loaded["openai_model"] = loaded.get("openai_model") or "gemini-2.5-flash"
+        elif provider == "groq":
+            loaded["base_url"] = loaded.get("base_url") or "https://api.groq.com/openai/v1"
+            loaded["openai_model"] = loaded.get("openai_model") or "openai/gpt-oss-20b"
+        elif provider == "openai_compatible":
+            loaded["base_url"] = loaded.get("base_url") or "https://api.openai.com/v1"
+        loaded.setdefault("auto_fallback", True)
+        loaded.setdefault("fallback_order", ["gemini", "groq", "ollama"])
         return {**DEFAULT, **loaded}
     except Exception:
         return DEFAULT.copy()
@@ -38,6 +51,9 @@ CFG = load_config()
 SYSTEM = """Você é JARVIS, um agente de trabalho para Windows, que conversa em português brasileiro.
 Responda sempre em português do Brasil.
 Ajude a concluir tarefas grandes com planejamento, execução em etapas e verificação.
+Quando o usuário pedir uma ação no computador, use a ferramenta apropriada em vez de apenas descrever etapas.
+Nunca diga que criou, leu, abriu, moveu ou baixou algo sem chamar a ferramenta correspondente e receber um resultado que confirme a operação.
+Se uma ferramenta falhar, informe o erro real e proponha o próximo passo seguro. Não invente sucesso.
 Se a tarefa exigir ações no computador, use as ferramentas disponíveis. Você pode trabalhar nos arquivos do usuário fora da pasta workspace quando ele indicar um caminho ou pedir uma busca. Nunca altere pastas críticas do Windows. Use as ferramentas de arquivos do Windows e confirme antes de criar, substituir, mover ou copiar arquivos.
 Antes de criar ou sobrescrever arquivos, peça confirmação ao usuário por meio da ferramenta de confirmação.
 Nunca diga que concluiu algo sem verificar o resultado.
@@ -54,6 +70,7 @@ TOOLS = [
  {"type":"function","function":{"name":"move_or_copy_windows_item","description":"Move ou copia um arquivo/pasta para outro caminho. Exige confirmação.","parameters":{"type":"object","properties":{"source":{"type":"string"},"destination":{"type":"string"},"mode":{"type":"string","enum":["mover","copiar"]}},"required":["source","destination","mode"]}}},
  {"type":"function","function":{"name":"download_windows_file","description":"Baixa um arquivo ou instalador por HTTPS para um caminho indicado. Exige confirmação e nunca executa o download automaticamente.","parameters":{"type":"object","properties":{"url":{"type":"string"},"destination":{"type":"string"}},"required":["url","destination"]}}},
  {"type":"function","function":{"name":"diagnose_windows","description":"Executa diagnósticos somente de leitura no Windows: rede, sistema ou processos.","parameters":{"type":"object","properties":{"kind":{"type":"string","enum":["rede","sistema","processos"]}},"required":["kind"]}}},
+ {"type":"function","function":{"name":"open_chrome_window","description":"Abre uma nova janela do Google Chrome. Pode abrir um endereço HTTP ou HTTPS opcional.","parameters":{"type":"object","properties":{"url":{"type":"string","description":"Endereço web opcional, começando com http:// ou https://"}},"required":[]}}},
  {"type":"function","function":{"name":"list_files","description":"Lista arquivos e pastas dentro do workspace ou de uma subpasta dele.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"Subpasta relativa; use vazio para a raiz."}},"required":["path"]}}},
  {"type":"function","function":{"name":"read_file","description":"Lê um arquivo de texto dentro do workspace.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}},
  {"type":"function","function":{"name":"write_file","description":"Cria ou substitui um arquivo de texto no workspace. Sempre exige confirmação do usuário.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}}},
@@ -186,8 +203,22 @@ class Jarvis:
         self.busy = True
         self.status.config(text="● Trabalhando...", fg="#ffcb80")
         self.send_btn.config(state="disabled")
+        self.active_provider = None
         threading.Thread(target=self.agent_loop, daemon=True).start()
 
+    def describe_tool_action(self, name, args):
+        labels = {
+            "search_files": "procurar arquivos", "list_windows_files": "listar uma pasta",
+            "read_windows_file": "ler um arquivo", "write_windows_file": "criar ou editar um arquivo",
+            "create_windows_folder": "criar uma pasta", "move_or_copy_windows_item": "mover ou copiar um item",
+            "download_windows_file": "baixar um arquivo", "diagnose_windows": "diagnosticar o Windows",
+            "open_chrome_window": "abrir uma nova janela do Google Chrome",
+            "list_files": "listar arquivos do workspace", "read_file": "ler arquivo do workspace",
+            "write_file": "gravar arquivo no workspace", "create_folder": "criar pasta no workspace",
+            "run_python": "executar script Python",
+        }
+        detail = args.get("name", "") if name == "search_files" else args.get("url", "") if name == "open_chrome_window" else args.get("kind", "") if name == "diagnose_windows" else args.get("destination", "") if name == "download_windows_file" else args.get("path", "")
+        return labels.get(name, name or "ferramenta") + (f" — {str(detail)[:140]}" if detail else "")
     def agent_loop(self):
         try:
             if self.project_notes:
@@ -195,7 +226,8 @@ class Jarvis:
             else:
                 self.messages[0]["content"] = SYSTEM
             for step in range(int(CFG.get("max_steps",8))):
-                response = self.call_model(self.messages)
+                self.q.put(("progress", f"Etapa {step + 1}: analisando o pedido e planejando a próxima ação..."))
+                response = self.call_model_with_fallback(self.messages)
                 msg = response.get("message", {})
                 tool_calls = msg.get("tool_calls") or []
                 if not tool_calls:
@@ -211,27 +243,92 @@ class Jarvis:
                     args = fn.get("arguments", {})
                     if isinstance(args, str):
                         args = json.loads(args)
+                    action = self.describe_tool_action(name, args)
+                    self.q.put(("progress", f"Tentando executar: {action}..."))
                     result = self.run_tool(name, args)
                     self.messages.append({"role":"tool","tool_call_id":call.get("id"),"name":name,"content":json.dumps(result,ensure_ascii=False)})
-                    self.q.put(("progress", f"Ferramenta: {name} — {str(result)[:300]}"))
+                    if isinstance(result, dict) and result.get("cancelled"):
+                        self.q.put(("progress", f"Operação cancelada: {action}."))
+                    elif isinstance(result, dict) and (result.get("error") or result.get("success") is False):
+                        error_text = str(result.get("error") or "erro não especificado")[:220]
+                        self.q.put(("progress", f"Falha ao executar: {action} — {error_text}"))
+                    elif isinstance(result, dict) and result.get("success") is True:
+                        self.q.put(("progress", f"Concluído: {action}."))
+                    else:
+                        self.q.put(("progress", f"Etapa executada: {action}. Resultado recebido; verificando a próxima etapa."))
             self.q.put(("answer","Atingi o limite de etapas desta rodada. Posso continuar se você pedir."))
         except Exception as e:
             self.q.put(("error", str(e)))
         finally:
             self.q.put(("done", None))
 
-    def get_api_key(self):
+    def get_api_key(self, provider=None):
+        provider = provider or CFG.get("provider", "deepseek")
+        account = provider + "_api_key"
         if keyring:
             try:
-                secret = keyring.get_password("JARVIS", "deepseek_api_key")
+                secret = keyring.get_password("JARVIS", account)
                 if secret:
                     return secret
+                # Compatibilidade com versões antigas que salvavam apenas a chave do DeepSeek.
+                if provider == "deepseek":
+                    secret = keyring.get_password("JARVIS", "deepseek_api_key")
+                    if secret:
+                        return secret
             except Exception:
                 pass
-        return os.environ.get("DEEPSEEK_API_KEY", "")
+        env_names = {
+            "deepseek": "DEEPSEEK_API_KEY",
+            "gemini": "GEMINI_API_KEY",
+            "groq": "GROQ_API_KEY",
+            "openai_compatible": "JARVIS_API_KEY",
+        }
+        return os.environ.get(env_names.get(provider, ""), "")
 
-    def call_model(self, messages):
-        provider = CFG.get("provider", "deepseek")
+    def call_model_with_fallback(self, messages):
+        primary = CFG.get("provider", "ollama")
+        if not CFG.get("auto_fallback", True):
+            candidates = [primary]
+        else:
+            order = CFG.get("fallback_order", ["gemini", "groq", "ollama"])
+            candidates = [self.active_provider or primary]
+            candidates.extend(p for p in order if p not in candidates)
+            if primary not in candidates:
+                candidates.insert(0, primary)
+
+        errors = []
+        for provider in candidates:
+            try:
+                response = self.call_model(messages, provider=provider)
+                if self.active_provider and provider != self.active_provider:
+                    self.q.put(("progress", f"Troca automática: {self.active_provider} indisponível; JARVIS passou a usar {provider}."))
+                elif provider != primary:
+                    self.q.put(("progress", f"Provedor principal indisponível; JARVIS passou automaticamente para {provider}."))
+                self.active_provider = provider
+                return response
+            except Exception as exc:
+                errors.append(f"{provider}: {exc}")
+                if not CFG.get("auto_fallback", True) or not self.is_fallback_error(exc):
+                    raise
+                self.q.put(("progress", f"Provedor {provider} falhou; verificando a próxima opção gratuita..."))
+        raise RuntimeError("Nenhum provedor configurado respondeu. " + " | ".join(errors))
+
+    def is_fallback_error(self, error):
+        message = str(error).lower()
+        if "chave api não encontrada" in message:
+            return True
+        retryable_codes = ("http 408", "http 409", "http 425", "http 429",
+                           "http 500", "http 502", "http 503", "http 504")
+        if any(code in message for code in retryable_codes):
+            return True
+        return any(term in message for term in (
+            "urlerror", "timed out", "timeout", "connection reset",
+            "connection refused", "temporary failure", "name or service not known",
+            "remote end closed", "network is unreachable"
+        ))
+
+    def call_model(self, messages, provider=None):
+        provider = provider or CFG.get("provider", "deepseek")
         if provider == "ollama":
             url = CFG.get("base_url", "http://localhost:11434").rstrip("/") + "/api/chat"
             payload = {"model": CFG.get("model", "qwen2.5:3b"), "messages": messages, "tools": TOOLS, "stream": False}
@@ -239,10 +336,16 @@ class Jarvis:
             api_format = False
         else:
             if provider == "deepseek":
-                base_url, model = "https://api.deepseek.com", CFG.get("openai_model", "deepseek-flash")
+                base_url, model = "https://api.deepseek.com", CFG.get("openai_model", "deepseek-chat")
+            elif provider == "gemini":
+                base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+                model = CFG.get("openai_model", "gemini-2.5-flash")
+            elif provider == "groq":
+                base_url = "https://api.groq.com/openai/v1"
+                model = CFG.get("openai_model", "openai/gpt-oss-20b")
             else:
                 base_url, model = CFG.get("base_url", "https://api.openai.com/v1"), CFG.get("openai_model", "gpt-4.1-mini")
-            api_key = self.get_api_key()
+            api_key = self.get_api_key(provider)
             if not api_key:
                 raise RuntimeError("Chave API não encontrada. Abra Configurações e salve a chave.")
             url = base_url.rstrip("/") + "/chat/completions"
@@ -291,6 +394,8 @@ class Jarvis:
                 return windows_tools.download_file(args["url"], args["destination"], self.ask_confirmation)
             if name == "diagnose_windows":
                 return windows_tools.diagnose_windows(args["kind"])
+            if name == "open_chrome_window":
+                return windows_tools.open_chrome_window(args.get("url"))
             if name == "list_files":
                 folder = safe_path(args.get("path",""))
                 if not os.path.isdir(folder): return {"error":"Pasta não encontrada"}
@@ -380,28 +485,47 @@ class Jarvis:
         win.configure(bg="#0d1b2c")
         tk.Label(win,text="Provedor de IA",fg="white",bg="#0d1b2c").pack(pady=(15,3))
         provider = tk.StringVar(value=CFG.get("provider", "ollama"))
-        ttk.Combobox(win,textvariable=provider,values=["ollama"],state="readonly").pack()
+        provider_box = ttk.Combobox(win,textvariable=provider,values=["gemini","groq","ollama","deepseek","openai_compatible"],state="readonly")
+        provider_box.pack()
+        auto_fallback = tk.BooleanVar(value=bool(CFG.get("auto_fallback", True)))
+        ttk.Checkbutton(win,text="Ativar troca automática quando um provedor falhar",variable=auto_fallback).pack(pady=(8,2))
+        tk.Label(win,text="Ordem automática de reserva: Gemini → Groq → Ollama (o provedor escolhido é sempre tentado primeiro).",fg="#9db4c7",bg="#0d1b2c",wraplength=510).pack(pady=(2,4))
         fields = {}
         for label,key,show in [
             ("Endereço base (OpenAI/Ollama)","base_url",None),
             ("Modelo local (Ollama)","model",None),
-            ("Modelo online (DeepSeek: deepseek-flash)","openai_model",None),
+            ("Modelo online (Gemini ou Groq)","openai_model",None),
             ("Nova chave API (oculta; não será gravada em config.json)","api_key","*")]:
             tk.Label(win,text=label,fg="white",bg="#0d1b2c",wraplength=510).pack(pady=(10,2))
             v=tk.StringVar(value=(CFG.get(key,"") if key != "api_key" else ""))
             ttk.Entry(win,textvariable=v,width=68,show=show).pack(); fields[key]=v
-        tk.Label(win,text="DeepSeek: https://api.deepseek.com • modelo: deepseek-flash",fg="#9db4c7",bg="#0d1b2c").pack(pady=(12,2))
+        def apply_provider_defaults(_event=None):
+            chosen = provider.get()
+            default_urls = {"deepseek":"https://api.deepseek.com", "gemini":"https://generativelanguage.googleapis.com/v1beta/openai", "groq":"https://api.groq.com/openai/v1", "openai_compatible":"https://api.openai.com/v1", "ollama":"http://localhost:11434"}
+            default_models = {"deepseek":"deepseek-chat", "gemini":"gemini-2.5-flash", "groq":"openai/gpt-oss-20b", "openai_compatible":"gpt-4.1-mini"}
+            current_url = fields["base_url"].get().strip()
+            if not current_url or current_url in set(default_urls.values()):
+                fields["base_url"].set(default_urls.get(chosen, default_urls["ollama"]))
+            current_model = fields["openai_model"].get().strip()
+            if not current_model or current_model in set(default_models.values()) or current_model == "deepseek-flash":
+                fields["openai_model"].set(default_models.get(chosen, ""))
+        provider_box.bind("<<ComboboxSelected>>", apply_provider_defaults)
+        tk.Label(win,text="Gemini e Groq usam APIs compatíveis com OpenAI. Groq: modelo openai/gpt-oss-20b.",fg="#9db4c7",bg="#0d1b2c",wraplength=510).pack(pady=(12,2))
         tk.Label(win,text="A chave é armazenada no Gerenciador de Credenciais do Windows.",fg="#9db4c7",bg="#0d1b2c",wraplength=510).pack()
         def save():
             chosen=provider.get(); CFG["provider"]=chosen
-            CFG["base_url"]=fields["base_url"].get().strip() or ("https://api.deepseek.com" if chosen=="deepseek" else "http://localhost:11434")
-            CFG["model"]=fields["model"].get().strip() or "qwen2.5:3b"
-            CFG["openai_model"]=fields["openai_model"].get().strip() or ("deepseek-flash" if chosen=="deepseek" else "gpt-4.1-mini")
+            default_urls = {"deepseek":"https://api.deepseek.com", "gemini":"https://generativelanguage.googleapis.com/v1beta/openai", "groq":"https://api.groq.com/openai/v1", "openai_compatible":"https://api.openai.com/v1", "ollama":"http://localhost:11434"}
+            CFG["base_url"]=fields["base_url"].get().strip() or default_urls.get(chosen, "http://localhost:11434")
+            CFG["model"]=fields["model"].get().strip() or "qwen2.5:1.5b"
+            default_models = {"deepseek":"deepseek-chat", "gemini":"gemini-2.5-flash", "groq":"openai/gpt-oss-20b", "openai_compatible":"gpt-4.1-mini"}
+            CFG["openai_model"]=fields["openai_model"].get().strip() or default_models.get(chosen, "")
+            CFG["auto_fallback"]=bool(auto_fallback.get())
+            CFG["fallback_order"]=["gemini","groq","ollama"]
             secret=fields["api_key"].get().strip()
             if secret:
                 if not keyring:
                     messagebox.showerror("Armazenamento seguro indisponível","O módulo keyring não está disponível. Instale os requisitos atualizados."); return
-                try: keyring.set_password("JARVIS","deepseek_api_key",secret)
+                try: keyring.set_password("JARVIS",chosen + "_api_key",secret)
                 except Exception as e: messagebox.showerror("Falha ao salvar chave",str(e)); return
             with open(CONFIG_FILE,"w",encoding="utf-8") as f:
                 json.dump(CFG,f,ensure_ascii=False,indent=2)
