@@ -101,3 +101,34 @@ def move_or_copy(source, destination, mode, confirm):
     else:
         shutil.copy2(src, dst)
     return {"success": True, "path": dst}
+
+
+def download_file(url, destination, confirm):
+    from urllib.parse import urlparse
+    from urllib.request import Request, urlopen
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        return {"error": "Por segurança, downloads exigem um endereço HTTPS válido."}
+    target = resolve_path(destination, for_write=True)
+    if not confirm("Confirmar download", f"Baixar este arquivo?\\nOrigem: {url}\\nDestino: {target}\\nO arquivo não será executado automaticamente."):
+        return {"cancelled": True}
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    request = Request(url, headers={"User-Agent": "JARVIS-Windows-Agent/1.0"})
+    total = 0
+    try:
+        with urlopen(request, timeout=45) as response, open(target, "wb") as output:
+            while True:
+                chunk = response.read(64 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > 150 * 1024 * 1024:
+                    output.close()
+                    os.remove(target)
+                    return {"error": "Download excedeu 150 MB e foi cancelado."}
+                output.write(chunk)
+    except Exception:
+        if os.path.exists(target):
+            os.remove(target)
+        raise
+    return {"success": True, "path": target, "bytes": total, "executed": False}
