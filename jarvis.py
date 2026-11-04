@@ -189,6 +189,19 @@ class Jarvis:
         self.send_btn.config(state="disabled")
         threading.Thread(target=self.agent_loop, daemon=True).start()
 
+    def describe_tool_action(self, name, args):
+        labels = {
+            "search_files": "procurar arquivos", "list_windows_files": "listar uma pasta",
+            "read_windows_file": "ler um arquivo", "write_windows_file": "criar ou editar um arquivo",
+            "create_windows_folder": "criar uma pasta", "move_or_copy_windows_item": "mover ou copiar um item",
+            "download_windows_file": "baixar um arquivo", "diagnose_windows": "diagnosticar o Windows",
+            "open_chrome_window": "abrir uma nova janela do Google Chrome",
+            "list_files": "listar arquivos do workspace", "read_file": "ler arquivo do workspace",
+            "write_file": "gravar arquivo no workspace", "create_folder": "criar pasta no workspace",
+            "run_python": "executar script Python",
+        }
+        detail = args.get("name", "") if name == "search_files" else args.get("url", "") if name == "open_chrome_window" else args.get("kind", "") if name == "diagnose_windows" else args.get("destination", "") if name == "download_windows_file" else args.get("path", "")
+        return labels.get(name, name or "ferramenta") + (f" — {str(detail)[:140]}" if detail else "")
     def agent_loop(self):
         try:
             if self.project_notes:
@@ -196,6 +209,7 @@ class Jarvis:
             else:
                 self.messages[0]["content"] = SYSTEM
             for step in range(int(CFG.get("max_steps",8))):
+                self.q.put(("progress", f"Etapa {step + 1}: analisando o pedido e planejando a próxima ação..."))
                 response = self.call_model(self.messages)
                 msg = response.get("message", {})
                 tool_calls = msg.get("tool_calls") or []
@@ -212,9 +226,18 @@ class Jarvis:
                     args = fn.get("arguments", {})
                     if isinstance(args, str):
                         args = json.loads(args)
+                    action = self.describe_tool_action(name, args)
+                    self.q.put(("progress", f"Tentando executar: {action}..."))
                     result = self.run_tool(name, args)
                     self.messages.append({"role":"tool","tool_call_id":call.get("id"),"name":name,"content":json.dumps(result,ensure_ascii=False)})
-                    self.q.put(("progress", f"Ferramenta: {name} — {str(result)[:300]}"))
+                    if isinstance(result, dict) and result.get("cancelled"):
+                        self.q.put(("progress", f"Operação cancelada: {action}."))
+                    elif isinstance(result, dict) and (result.get("error") or result.get("success") is False):
+                        self.q.put(("progress", f"Falha ao executar: {action} — {str(result.get("error", "erro não especificado"))[:220]}"))
+                    elif isinstance(result, dict) and result.get("success") is True:
+                        self.q.put(("progress", f"Concluído: {action}."))
+                    else:
+                        self.q.put(("progress", f"Etapa executada: {action}. Resultado recebido; verificando a próxima etapa."))
             self.q.put(("answer","Atingi o limite de etapas desta rodada. Posso continuar se você pedir."))
         except Exception as e:
             self.q.put(("error", str(e)))
