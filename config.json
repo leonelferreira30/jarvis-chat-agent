@@ -1,7 +1,13 @@
 {
-  "provider": "deepseek",
-  "model": "qwen2.5:3b",
-  "base_url": "https://api.deepseek.com",
-  "openai_model": "deepseek-flash",
-  "max_steps": 8
+  "provider": "gemini",
+  "model": "qwen2.5:1.5b",
+  "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+  "openai_model": "gemini-2.5-flash",
+  "max_steps": 8,
+  "auto_fallback": true,
+  "fallback_order": [
+    "gemini",
+    "groq",
+    "ollama"
+  ]
 }
