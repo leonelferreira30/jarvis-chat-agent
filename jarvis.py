@@ -433,7 +433,8 @@ class Jarvis:
         win.configure(bg="#0d1b2c")
         tk.Label(win,text="Provedor de IA",fg="white",bg="#0d1b2c").pack(pady=(15,3))
         provider = tk.StringVar(value=CFG.get("provider", "ollama"))
-        ttk.Combobox(win,textvariable=provider,values=["ollama","gemini","deepseek","openai_compatible"],state="readonly").pack()
+        provider_box = ttk.Combobox(win,textvariable=provider,values=["ollama","gemini","deepseek","openai_compatible"],state="readonly")
+        provider_box.pack()
         fields = {}
         for label,key,show in [
             ("Endereço base (OpenAI/Ollama)","base_url",None),
@@ -443,6 +444,17 @@ class Jarvis:
             tk.Label(win,text=label,fg="white",bg="#0d1b2c",wraplength=510).pack(pady=(10,2))
             v=tk.StringVar(value=(CFG.get(key,"") if key != "api_key" else ""))
             ttk.Entry(win,textvariable=v,width=68,show=show).pack(); fields[key]=v
+        def apply_provider_defaults(_event=None):
+            chosen = provider.get()
+            default_urls = {"deepseek":"https://api.deepseek.com", "gemini":"https://generativelanguage.googleapis.com/v1beta/openai", "openai_compatible":"https://api.openai.com/v1", "ollama":"http://localhost:11434"}
+            default_models = {"deepseek":"deepseek-chat", "gemini":"gemini-2.5-flash", "openai_compatible":"gpt-4.1-mini"}
+            current_url = fields["base_url"].get().strip()
+            if not current_url or current_url in set(default_urls.values()):
+                fields["base_url"].set(default_urls.get(chosen, default_urls["ollama"]))
+            current_model = fields["openai_model"].get().strip()
+            if not current_model or current_model in set(default_models.values()):
+                fields["openai_model"].set(default_models.get(chosen, ""))
+        provider_box.bind("<<ComboboxSelected>>", apply_provider_defaults)
         tk.Label(win,text="Gemini gratuito: https://generativelanguage.googleapis.com/v1beta/openai • modelo: gemini-2.5-flash",fg="#9db4c7",bg="#0d1b2c",wraplength=510).pack(pady=(12,2))
         tk.Label(win,text="A chave é armazenada no Gerenciador de Credenciais do Windows.",fg="#9db4c7",bg="#0d1b2c",wraplength=510).pack()
         def save():
