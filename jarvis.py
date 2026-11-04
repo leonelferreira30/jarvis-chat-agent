@@ -507,7 +507,7 @@ class Jarvis:
             if not current_url or current_url in set(default_urls.values()):
                 fields["base_url"].set(default_urls.get(chosen, default_urls["ollama"]))
             current_model = fields["openai_model"].get().strip()
-            if not current_model or current_model in set(default_models.values()):
+            if not current_model or current_model in set(default_models.values()) or current_model == "deepseek-flash":
                 fields["openai_model"].set(default_models.get(chosen, ""))
         provider_box.bind("<<ComboboxSelected>>", apply_provider_defaults)
         tk.Label(win,text="Gemini e Groq usam APIs compatíveis com OpenAI. Groq: modelo openai/gpt-oss-20b.",fg="#9db4c7",bg="#0d1b2c",wraplength=510).pack(pady=(12,2))
