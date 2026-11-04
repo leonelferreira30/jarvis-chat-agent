@@ -25,10 +25,15 @@ def load_config():
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
             loaded = json.load(f)
         loaded.pop("api_key", None)
-        if loaded.get("provider") == "deepseek":
-            loaded["provider"] = "ollama"
-            loaded["base_url"] = "http://localhost:11434"
-            loaded["model"] = "qwen2.5:1.5b"
+        provider = loaded.get("provider", DEFAULT["provider"])
+        if provider not in ("ollama", "deepseek", "openai_compatible"):
+            provider = DEFAULT["provider"]
+        loaded["provider"] = provider
+        if provider == "deepseek":
+            loaded["base_url"] = loaded.get("base_url") or "https://api.deepseek.com"
+            loaded["openai_model"] = loaded.get("openai_model") or "deepseek-chat"
+        elif provider == "openai_compatible":
+            loaded["base_url"] = loaded.get("base_url") or "https://api.openai.com/v1"
         return {**DEFAULT, **loaded}
     except Exception:
         return DEFAULT.copy()
@@ -407,7 +412,7 @@ class Jarvis:
         win.configure(bg="#0d1b2c")
         tk.Label(win,text="Provedor de IA",fg="white",bg="#0d1b2c").pack(pady=(15,3))
         provider = tk.StringVar(value=CFG.get("provider", "ollama"))
-        ttk.Combobox(win,textvariable=provider,values=["ollama"],state="readonly").pack()
+        ttk.Combobox(win,textvariable=provider,values=["ollama","deepseek","openai_compatible"],state="readonly").pack()
         fields = {}
         for label,key,show in [
             ("Endereço base (OpenAI/Ollama)","base_url",None),
@@ -421,9 +426,9 @@ class Jarvis:
         tk.Label(win,text="A chave é armazenada no Gerenciador de Credenciais do Windows.",fg="#9db4c7",bg="#0d1b2c",wraplength=510).pack()
         def save():
             chosen=provider.get(); CFG["provider"]=chosen
-            CFG["base_url"]=fields["base_url"].get().strip() or ("https://api.deepseek.com" if chosen=="deepseek" else "http://localhost:11434")
-            CFG["model"]=fields["model"].get().strip() or "qwen2.5:3b"
-            CFG["openai_model"]=fields["openai_model"].get().strip() or ("deepseek-flash" if chosen=="deepseek" else "gpt-4.1-mini")
+            CFG["base_url"]=fields["base_url"].get().strip() or ("https://api.deepseek.com" if chosen=="deepseek" else ("https://api.openai.com/v1" if chosen=="openai_compatible" else "http://localhost:11434"))
+            CFG["model"]=fields["model"].get().strip() or "qwen2.5:1.5b"
+            CFG["openai_model"]=fields["openai_model"].get().strip() or ("deepseek-chat" if chosen=="deepseek" else "gpt-4.1-mini")
             secret=fields["api_key"].get().strip()
             if secret:
                 if not keyring:
