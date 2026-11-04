@@ -132,3 +132,33 @@ def download_file(url, destination, confirm):
             os.remove(target)
         raise
     return {"success": True, "path": target, "bytes": total, "executed": False}
+
+
+def diagnose_windows(kind):
+    import subprocess
+    commands = {
+        "rede": ["ipconfig", "/all"],
+        "sistema": ["systeminfo"],
+        "processos": ["tasklist"],
+    }
+    if kind not in commands:
+        return {"error": "Diagnósticos disponíveis: rede, sistema ou processos."}
+    result = subprocess.run(commands[kind], capture_output=True, text=True, timeout=60, shell=False)
+    return {"returncode": result.returncode, "output": (result.stdout or result.stderr)[-12000:]}
+
+def repair_windows(kind, confirm):
+    import subprocess
+    jobs = {
+        "limpar_dns": (["ipconfig", "/flushdns"], "Limpar o cache DNS. Não altera arquivos pessoais."),
+        "verificar_arquivos": (["sfc", "/scannow"], "Verificar e tentar reparar arquivos protegidos do Windows. Pode demorar bastante."),
+    }
+    if kind not in jobs:
+        return {"error": "Reparos disponíveis: limpar_dns ou verificar_arquivos."}
+    command, description = jobs[kind]
+    if not confirm("Autorizar reparo do Windows", description + "\\n\\nO Windows pode solicitar privilégios de administrador."):
+        return {"cancelled": True}
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=3600, shell=False)
+        return {"returncode": result.returncode, "output": (result.stdout + "\\n" + result.stderr)[-14000:]}
+    except subprocess.TimeoutExpired:
+        return {"error": "O reparo demorou mais que o limite de uma hora. Verifique o estado do Windows antes de tentar novamente."}
