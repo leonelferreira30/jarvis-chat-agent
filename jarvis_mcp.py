@@ -217,6 +217,7 @@ def main():
         line = raw_line.strip()
         if not line:
             continue
+        request = None
         try:
             request = json.loads(line)
             response = handle_message(request)
