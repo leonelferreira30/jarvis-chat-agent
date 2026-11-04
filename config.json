@@ -1,0 +1,7 @@
+{
+  "provider": "deepseek",
+  "model": "qwen2.5:3b",
+  "base_url": "https://api.deepseek.com",
+  "openai_model": "deepseek-flash",
+  "max_steps": 8
+}
