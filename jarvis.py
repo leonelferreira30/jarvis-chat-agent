@@ -4,6 +4,7 @@ try:
 except Exception:
     keyring = None
 import tkinter as tk
+import windows_tools
 from tkinter import ttk, messagebox, filedialog
 
 APP_DIR = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__))
@@ -37,7 +38,7 @@ CFG = load_config()
 SYSTEM = """Você é JARVIS, um agente de trabalho para Windows, que conversa em português brasileiro.
 Responda sempre em português do Brasil.
 Ajude a concluir tarefas grandes com planejamento, execução em etapas e verificação.
-Se a tarefa exigir ações no computador, use as ferramentas disponíveis. Trabalhe somente dentro da pasta workspace.
+Se a tarefa exigir ações no computador, use as ferramentas disponíveis. Você pode trabalhar nos arquivos do usuário fora da pasta workspace quando ele indicar um caminho ou pedir uma busca. Nunca altere pastas críticas do Windows. Use as ferramentas de arquivos do Windows e confirme antes de criar, substituir, mover ou copiar arquivos.
 Antes de criar ou sobrescrever arquivos, peça confirmação ao usuário por meio da ferramenta de confirmação.
 Nunca diga que concluiu algo sem verificar o resultado.
 Não revele raciocínio interno privado. Em vez disso, apresente planos, decisões resumidas, progresso e resultados verificáveis.
@@ -45,6 +46,12 @@ Se faltar informação essencial, faça uma pergunta objetiva.
 Se uma tarefa for grande, divida em etapas pequenas e execute o máximo possível com as ferramentas permitidas."""
 
 TOOLS = [
+ {"type":"function","function":{"name":"search_files","description":"Procura arquivos pelo nome em uma pasta do Windows. Se a pasta não for informada, pesquisa na pasta do usuário.","parameters":{"type":"object","properties":{"name":{"type":"string"},"folder":{"type":"string"}},"required":["name"]}}},
+ {"type":"function","function":{"name":"list_windows_files","description":"Lista arquivos e pastas em qualquer pasta acessível do Windows.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}},
+ {"type":"function","function":{"name":"read_windows_file","description":"Lê um arquivo de texto por caminho completo no Windows.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}},
+ {"type":"function","function":{"name":"write_windows_file","description":"Cria ou substitui um arquivo de texto em um caminho completo do Windows. Exige confirmação.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}}},
+ {"type":"function","function":{"name":"create_windows_folder","description":"Cria uma pasta no Windows em um caminho completo. Exige confirmação.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}},
+ {"type":"function","function":{"name":"move_or_copy_windows_item","description":"Move ou copia um arquivo/pasta para outro caminho. Exige confirmação.","parameters":{"type":"object","properties":{"source":{"type":"string"},"destination":{"type":"string"},"mode":{"type":"string","enum":["mover","copiar"]}},"required":["source","destination","mode"]}}},
  {"type":"function","function":{"name":"list_files","description":"Lista arquivos e pastas dentro do workspace ou de uma subpasta dele.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"Subpasta relativa; use vazio para a raiz."}},"required":["path"]}}},
  {"type":"function","function":{"name":"read_file","description":"Lê um arquivo de texto dentro do workspace.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}},
  {"type":"function","function":{"name":"write_file","description":"Cria ou substitui um arquivo de texto no workspace. Sempre exige confirmação do usuário.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}}},
@@ -266,6 +273,18 @@ class Jarvis:
 
     def run_tool(self, name, args):
         try:
+            if name == "search_files":
+                return windows_tools.search_files(args.get("name",""), args.get("folder") or None)
+            if name == "list_windows_files":
+                return windows_tools.list_files(args["path"])
+            if name == "read_windows_file":
+                return windows_tools.read_text(args["path"])
+            if name == "write_windows_file":
+                return windows_tools.write_text(args["path"], args.get("content",""), self.ask_confirmation)
+            if name == "create_windows_folder":
+                return windows_tools.create_folder(args["path"], self.ask_confirmation)
+            if name == "move_or_copy_windows_item":
+                return windows_tools.move_or_copy(args["source"], args["destination"], args["mode"], self.ask_confirmation)
             if name == "list_files":
                 folder = safe_path(args.get("path",""))
                 if not os.path.isdir(folder): return {"error":"Pasta não encontrada"}
