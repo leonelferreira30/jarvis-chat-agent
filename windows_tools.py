@@ -73,7 +73,12 @@ def write_text(path, content, confirm):
     os.makedirs(os.path.dirname(target), exist_ok=True)
     with open(target, "w", encoding="utf-8") as f:
         f.write(content)
-    return {"success": True, "path": target}
+        f.flush()
+        os.fsync(f.fileno())
+    expected_size = len(content.encode("utf-8"))
+    if not os.path.isfile(target) or os.path.getsize(target) != expected_size:
+        return {"success": False, "error": "A gravação não passou na verificação final.", "path": target}
+    return {"success": True, "path": target, "bytes": expected_size, "verified": True}
 
 def create_folder(path, confirm):
     target = resolve_path(path, for_write=True)
@@ -176,8 +181,8 @@ def open_chrome_window(url=None):
         candidates.append(found)
 
     local = os.environ.get("LOCALAPPDATA", "")
-    program_files = os.environ.get("PROGRAMFILES", r"C:\\Program Files")
-    program_files_x86 = os.environ.get("PROGRAMFILES(X86)", r"C:\\Program Files (x86)")
+    program_files = os.environ.get("PROGRAMFILES", r"C:\Program Files")
+    program_files_x86 = os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)")
     for base in (local, program_files, program_files_x86):
         if base:
             candidates.append(str(Path(base) / "Google" / "Chrome" / "Application" / "chrome.exe"))
@@ -187,8 +192,8 @@ def open_chrome_window(url=None):
         import winreg
         for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
             for key_path in (
-                r"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\chrome.exe",
-                r"SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\App Paths\\chrome.exe",
+                r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
+                r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
             ):
                 try:
                     with winreg.OpenKey(hive, key_path) as key:
