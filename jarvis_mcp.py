@@ -14,6 +14,10 @@ from tkinter import messagebox
 
 import windows_tools
 
+# MCP stdio requires UTF-8 even when Windows' active code page is different.
+for _stream in (sys.stdin, sys.stdout):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8")
 
 logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(levelname)s: %(message)s")
 LOGGER = logging.getLogger("jarvis_mcp")
