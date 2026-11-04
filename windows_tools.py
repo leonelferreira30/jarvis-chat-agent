@@ -162,3 +162,57 @@ def repair_windows(kind, confirm):
         return {"returncode": result.returncode, "output": (result.stdout + "\\n" + result.stderr)[-14000:]}
     except subprocess.TimeoutExpired:
         return {"error": "O reparo demorou mais que o limite de uma hora. Verifique o estado do Windows antes de tentar novamente."}
+
+
+def open_chrome_window(url=None):
+    """Open a new Google Chrome window without invoking a shell command."""
+    import subprocess
+    import shutil
+    from pathlib import Path
+
+    candidates = []
+    found = shutil.which("chrome") or shutil.which("chrome.exe")
+    if found:
+        candidates.append(found)
+
+    local = os.environ.get("LOCALAPPDATA", "")
+    program_files = os.environ.get("PROGRAMFILES", r"C:\\Program Files")
+    program_files_x86 = os.environ.get("PROGRAMFILES(X86)", r"C:\\Program Files (x86)")
+    for base in (local, program_files, program_files_x86):
+        if base:
+            candidates.append(str(Path(base) / "Google" / "Chrome" / "Application" / "chrome.exe"))
+
+    # App Paths is the usual Windows registration for Chrome.
+    try:
+        import winreg
+        for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+            for key_path in (
+                r"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\chrome.exe",
+                r"SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\App Paths\\chrome.exe",
+            ):
+                try:
+                    with winreg.OpenKey(hive, key_path) as key:
+                        value, _ = winreg.QueryValueEx(key, "")
+                        candidates.insert(0, value)
+                except OSError:
+                    pass
+    except ImportError:
+        pass
+
+    chrome = next((p for p in candidates if p and os.path.isfile(p)), None)
+    if not chrome:
+        return {"success": False, "error": "Google Chrome não foi encontrado. Verifique se está instalado."}
+
+    args = [chrome, "--new-window"]
+    if url:
+        from urllib.parse import urlparse
+        parsed = urlparse(str(url).strip())
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            return {"success": False, "error": "O endereço precisa começar com http:// ou https:// e ser válido."}
+        args.append(str(url).strip())
+
+    try:
+        process = subprocess.Popen(args, close_fds=True)
+        return {"success": True, "browser": "Google Chrome", "new_window_requested": True, "pid": process.pid, "url": url or None}
+    except OSError as exc:
+        return {"success": False, "error": f"Não foi possível iniciar o Chrome: {exc}"}
