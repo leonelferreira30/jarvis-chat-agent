@@ -1,26 +1,32 @@
-JARVIS CHAT AGENT — EDIÇÃO DEEPSEEK (WINDOWS)
+JARVIS CHAT AGENT — WINDOWS AGENT (EM DESENVOLVIMENTO)
 
-IA principal online: DeepSeek API. A API pode gerar cobrança conforme o uso.
+REQUISITOS
+- Windows 10/11
+- Python 3.10 ou superior
+- Ollama instalado e executando para o provedor local configurado
+- Instale dependências: py -m pip install -r requirements.txt
 
-INSTALAÇÃO
-1. Extraia a pasta JARVIS_Chat_Agent.
-2. Abra o Prompt de Comando dentro dela.
+INICIAR
+1. Baixe/clique em Code > Download ZIP ou clone este repositório.
+2. Abra o Prompt de Comando na pasta do projeto.
 3. Execute: py -m pip install -r requirements.txt
 4. Execute: py jarvis.py
-5. Clique em Configurações, escolha deepseek e mantenha o modelo deepseek-flash.
-6. Cole sua chave API no campo protegido e salve.
 
-SEGURANÇA DA CHAVE
-A chave não é escrita em config.json. O programa usa o Gerenciador de Credenciais do Windows via keyring. Se esse armazenamento não estiver disponível, a gravação é recusada. Não compartilhe chaves em chats ou prints. Como uma chave foi exposta nesta conversa, a recomendação segura continua sendo revogá-la e criar outra; esta versão não utiliza a chave publicada.
+RECURSOS IMPLEMENTADOS NESTA BRANCH
+- Interface de chat Tkinter em português.
+- Planejamento em várias etapas com ferramentas.
+- Pesquisa de arquivos pelo nome na pasta do usuário ou em uma pasta indicada.
+- Listagem e leitura de arquivos de texto por caminho completo.
+- Criação e edição de arquivos de texto em locais indicados pelo usuário.
+- Criação de pastas.
+- Cópia e movimentação de arquivos e pastas.
+- Confirmação antes de criar, substituir, copiar ou mover arquivos.
+- Bloqueio de gravação em diretórios críticos do Windows.
+- Memória resumida dentro de workspace.
 
-RECURSOS
-- Chat em português e planejamento em várias etapas.
-- Ferramentas limitadas à pasta workspace: listar, ler, criar pastas e gravar arquivos.
-- Confirmação antes de gravar arquivos e executar scripts Python.
-- Memória resumida em workspace/jarvis_project_memory.md.
+IMPORTANTE — LIMITES DESTA VERSÃO
+Esta etapa corrige o bloqueio que limitava todas as operações à pasta workspace. Ela não concede acesso irrestrito nem executa qualquer comando arbitrário. Reparos do Windows, downloads/instalações, controle de programas, drivers e automação avançada ainda precisam ser implementados e testados em etapas próprias.
+Arquivos binários (por exemplo, imagens, executáveis e documentos complexos) não são editados pela ferramenta de texto. Não execute arquivos baixados sem verificar sua origem e assinatura. Operações de escrita em diretórios críticos do Windows são bloqueadas.
 
-LIMITES
-Esta versão não controla mouse/teclado, navegador, e-mail ou todo o Windows. O conteúdo da conversa e dos arquivos enviados ao modelo é transmitido à DeepSeek. Revise scripts antes de autorizar sua execução.
-
-GERAR EXE
-No Windows, execute build_exe.bat. O executável será criado em dist\JARVIS\JARVIS.exe. Mantenha a pasta dist\JARVIS inteira.
+GERAR EXECUTÁVEL
+No Windows, execute build_exe.bat. O executável fica em dist\JARVIS\JARVIS.exe. Mantenha a pasta completa ao distribuir.
