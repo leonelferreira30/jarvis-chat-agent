@@ -52,5 +52,5 @@ GERAR EXECUTÁVEIS
 No Windows, execute build_exe.bat. O aplicativo fica em dist\\JARVIS\\JARVIS.exe e o servidor local MCP em dist\\JARVIS-MCP.exe. No Codex, configure o executável JARVIS-MCP.exe como servidor STDIO. Mantenha a pasta completa do JARVIS ao distribuir.
 
 IMPORTANTE — LIMITES DESTA VERSÃO
-Esta etapa corrige o bloqueio que limitava todas as operações à pasta workspace. Ela não concede acesso irrestrito nem executa qualquer comando arbitrário. Reparos do Windows, downloads/instalações, controle de programas, drivers e automação avançada ainda precisam ser implementados e testados em etapas próprias.
+A integração não concede acesso irrestrito nem executa comandos arbitrários. O JARVIS pode baixar arquivos HTTPS com confirmação e abrir o Chrome; instalações de programas, drivers, reparos do Windows e automação avançada não são expostos pelo servidor MCP.
 Arquivos binários (por exemplo, imagens, executáveis e documentos complexos) não são editados pela ferramenta de texto. Não execute arquivos baixados sem verificar sua origem e assinatura. Operações de escrita em diretórios críticos do Windows são bloqueadas.
