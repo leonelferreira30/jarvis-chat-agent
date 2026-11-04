@@ -26,12 +26,15 @@ def load_config():
             loaded = json.load(f)
         loaded.pop("api_key", None)
         provider = loaded.get("provider", DEFAULT["provider"])
-        if provider not in ("ollama", "deepseek", "openai_compatible"):
+        if provider not in ("ollama", "deepseek", "gemini", "openai_compatible"):
             provider = DEFAULT["provider"]
         loaded["provider"] = provider
         if provider == "deepseek":
             loaded["base_url"] = loaded.get("base_url") or "https://api.deepseek.com"
             loaded["openai_model"] = loaded.get("openai_model") or "deepseek-chat"
+        elif provider == "gemini":
+            loaded["base_url"] = loaded.get("base_url") or "https://generativelanguage.googleapis.com/v1beta/openai"
+            loaded["openai_model"] = loaded.get("openai_model") or "gemini-2.5-flash"
         elif provider == "openai_compatible":
             loaded["base_url"] = loaded.get("base_url") or "https://api.openai.com/v1"
         return {**DEFAULT, **loaded}
@@ -253,15 +256,27 @@ class Jarvis:
         finally:
             self.q.put(("done", None))
 
-    def get_api_key(self):
+    def get_api_key(self, provider=None):
+        provider = provider or CFG.get("provider", "deepseek")
+        account = provider + "_api_key"
         if keyring:
             try:
-                secret = keyring.get_password("JARVIS", "deepseek_api_key")
+                secret = keyring.get_password("JARVIS", account)
                 if secret:
                     return secret
+                # Compatibilidade com versões antigas que salvavam apenas a chave do DeepSeek.
+                if provider == "deepseek":
+                    secret = keyring.get_password("JARVIS", "deepseek_api_key")
+                    if secret:
+                        return secret
             except Exception:
                 pass
-        return os.environ.get("DEEPSEEK_API_KEY", "")
+        env_names = {
+            "deepseek": "DEEPSEEK_API_KEY",
+            "gemini": "GEMINI_API_KEY",
+            "openai_compatible": "JARVIS_API_KEY",
+        }
+        return os.environ.get(env_names.get(provider, ""), "")
 
     def call_model(self, messages):
         provider = CFG.get("provider", "deepseek")
@@ -272,10 +287,13 @@ class Jarvis:
             api_format = False
         else:
             if provider == "deepseek":
-                base_url, model = "https://api.deepseek.com", CFG.get("openai_model", "deepseek-flash")
+                base_url, model = "https://api.deepseek.com", CFG.get("openai_model", "deepseek-chat")
+            elif provider == "gemini":
+                base_url = CFG.get("base_url", "https://generativelanguage.googleapis.com/v1beta/openai")
+                model = CFG.get("openai_model", "gemini-2.5-flash")
             else:
                 base_url, model = CFG.get("base_url", "https://api.openai.com/v1"), CFG.get("openai_model", "gpt-4.1-mini")
-            api_key = self.get_api_key()
+            api_key = self.get_api_key(provider)
             if not api_key:
                 raise RuntimeError("Chave API não encontrada. Abra Configurações e salve a chave.")
             url = base_url.rstrip("/") + "/chat/completions"
@@ -415,28 +433,30 @@ class Jarvis:
         win.configure(bg="#0d1b2c")
         tk.Label(win,text="Provedor de IA",fg="white",bg="#0d1b2c").pack(pady=(15,3))
         provider = tk.StringVar(value=CFG.get("provider", "ollama"))
-        ttk.Combobox(win,textvariable=provider,values=["ollama","deepseek","openai_compatible"],state="readonly").pack()
+        ttk.Combobox(win,textvariable=provider,values=["ollama","gemini","deepseek","openai_compatible"],state="readonly").pack()
         fields = {}
         for label,key,show in [
             ("Endereço base (OpenAI/Ollama)","base_url",None),
             ("Modelo local (Ollama)","model",None),
-            ("Modelo online (DeepSeek: deepseek-flash)","openai_model",None),
+            ("Modelo online (Gemini: gemini-2.5-flash)","openai_model",None),
             ("Nova chave API (oculta; não será gravada em config.json)","api_key","*")]:
             tk.Label(win,text=label,fg="white",bg="#0d1b2c",wraplength=510).pack(pady=(10,2))
             v=tk.StringVar(value=(CFG.get(key,"") if key != "api_key" else ""))
             ttk.Entry(win,textvariable=v,width=68,show=show).pack(); fields[key]=v
-        tk.Label(win,text="DeepSeek: https://api.deepseek.com • modelo: deepseek-flash",fg="#9db4c7",bg="#0d1b2c").pack(pady=(12,2))
+        tk.Label(win,text="Gemini gratuito: https://generativelanguage.googleapis.com/v1beta/openai • modelo: gemini-2.5-flash",fg="#9db4c7",bg="#0d1b2c",wraplength=510).pack(pady=(12,2))
         tk.Label(win,text="A chave é armazenada no Gerenciador de Credenciais do Windows.",fg="#9db4c7",bg="#0d1b2c",wraplength=510).pack()
         def save():
             chosen=provider.get(); CFG["provider"]=chosen
-            CFG["base_url"]=fields["base_url"].get().strip() or ("https://api.deepseek.com" if chosen=="deepseek" else ("https://api.openai.com/v1" if chosen=="openai_compatible" else "http://localhost:11434"))
+            default_urls = {"deepseek":"https://api.deepseek.com", "gemini":"https://generativelanguage.googleapis.com/v1beta/openai", "openai_compatible":"https://api.openai.com/v1", "ollama":"http://localhost:11434"}
+            CFG["base_url"]=fields["base_url"].get().strip() or default_urls.get(chosen, "http://localhost:11434")
             CFG["model"]=fields["model"].get().strip() or "qwen2.5:1.5b"
-            CFG["openai_model"]=fields["openai_model"].get().strip() or ("deepseek-chat" if chosen=="deepseek" else "gpt-4.1-mini")
+            default_models = {"deepseek":"deepseek-chat", "gemini":"gemini-2.5-flash", "openai_compatible":"gpt-4.1-mini"}
+            CFG["openai_model"]=fields["openai_model"].get().strip() or default_models.get(chosen, "")
             secret=fields["api_key"].get().strip()
             if secret:
                 if not keyring:
                     messagebox.showerror("Armazenamento seguro indisponível","O módulo keyring não está disponível. Instale os requisitos atualizados."); return
-                try: keyring.set_password("JARVIS","deepseek_api_key",secret)
+                try: keyring.set_password("JARVIS",chosen + "_api_key",secret)
                 except Exception as e: messagebox.showerror("Falha ao salvar chave",str(e)); return
             with open(CONFIG_FILE,"w",encoding="utf-8") as f:
                 json.dump(CFG,f,ensure_ascii=False,indent=2)
