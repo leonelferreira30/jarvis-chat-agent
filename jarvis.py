@@ -233,7 +233,8 @@ class Jarvis:
                     if isinstance(result, dict) and result.get("cancelled"):
                         self.q.put(("progress", f"Operação cancelada: {action}."))
                     elif isinstance(result, dict) and (result.get("error") or result.get("success") is False):
-                        self.q.put(("progress", f"Falha ao executar: {action} — {str(result.get("error", "erro não especificado"))[:220]}"))
+                        error_text = str(result.get("error") or "erro não especificado")[:220]
+                        self.q.put(("progress", f"Falha ao executar: {action} — {error_text}"))
                     elif isinstance(result, dict) and result.get("success") is True:
                         self.q.put(("progress", f"Concluído: {action}."))
                     else:
