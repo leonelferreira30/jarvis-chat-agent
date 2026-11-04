@@ -52,6 +52,7 @@ TOOLS = [
  {"type":"function","function":{"name":"write_windows_file","description":"Cria ou substitui um arquivo de texto em um caminho completo do Windows. Exige confirmação.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}}},
  {"type":"function","function":{"name":"create_windows_folder","description":"Cria uma pasta no Windows em um caminho completo. Exige confirmação.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}},
  {"type":"function","function":{"name":"move_or_copy_windows_item","description":"Move ou copia um arquivo/pasta para outro caminho. Exige confirmação.","parameters":{"type":"object","properties":{"source":{"type":"string"},"destination":{"type":"string"},"mode":{"type":"string","enum":["mover","copiar"]}},"required":["source","destination","mode"]}}},
+ {"type":"function","function":{"name":"download_windows_file","description":"Baixa um arquivo ou instalador por HTTPS para um caminho indicado. Exige confirmação e nunca executa o download automaticamente.","parameters":{"type":"object","properties":{"url":{"type":"string"},"destination":{"type":"string"}},"required":["url","destination"]}}},
  {"type":"function","function":{"name":"list_files","description":"Lista arquivos e pastas dentro do workspace ou de uma subpasta dele.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"Subpasta relativa; use vazio para a raiz."}},"required":["path"]}}},
  {"type":"function","function":{"name":"read_file","description":"Lê um arquivo de texto dentro do workspace.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}},
  {"type":"function","function":{"name":"write_file","description":"Cria ou substitui um arquivo de texto no workspace. Sempre exige confirmação do usuário.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}}},
@@ -285,6 +286,8 @@ class Jarvis:
                 return windows_tools.create_folder(args["path"], self.ask_confirmation)
             if name == "move_or_copy_windows_item":
                 return windows_tools.move_or_copy(args["source"], args["destination"], args["mode"], self.ask_confirmation)
+            if name == "download_windows_file":
+                return windows_tools.download_file(args["url"], args["destination"], self.ask_confirmation)
             if name == "list_files":
                 folder = safe_path(args.get("path",""))
                 if not os.path.isdir(folder): return {"error":"Pasta não encontrada"}
